@@ -177,8 +177,18 @@ namespace librealsense
 
             if( health )
             {
-                auto h = _calib_engine->get_triggered_calibration_health();
-                *health = h.rect_health;   // primary pass/fail metric; full struct available via engine
+                // Only trust the health payload once the FW has actually populated it (from HEALTH_CHECK onward).
+                // If FAILED_TO_CONVERGE / FAILED_TO_RUN broke the loop before that, _hkr_ans.health is still zero-initialized
+                // and 0.0 would spuriously read as "PASS" (< 0.40 threshold) in the viewer — return the -1 sentinel instead.
+                if( _state == calibration_state::HEALTH_CHECK || _state == calibration_state::COMPLETE )
+                {
+                    auto h = _calib_engine->get_triggered_calibration_health();
+                    *health = h.rect_health;   // primary pass/fail metric; full struct available via engine
+                }
+                else
+                {
+                    *health = -1.f;
+                }
             }
             return res;
         }
