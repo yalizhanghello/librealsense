@@ -19,7 +19,7 @@ struct d500_calibration_answer
     ds::d500_coefficients_table depth_calibration;
 };
 
-// D5x5 HKR-new reply layout (RSDEV-9362) — 3-byte header + 20-byte health block + 512-byte table (total 535 from HEALTH_CHECK).
+// D5x5 HKR-new reply layout — 3-byte header + 20-byte health block + 512-byte table (total 535 from HEALTH_CHECK).
 struct hkr_calibration_answer
 {
     calibration_state state;            // wire byte 2 means HEALTH_CHECK on this path

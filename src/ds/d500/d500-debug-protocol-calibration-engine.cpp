@@ -5,6 +5,8 @@
 #include <src/ds/d500/d500-types/calibration-config.h>
 #include "d500-device.h"
 
+#include <cstring>
+
 
 namespace librealsense
 {
@@ -32,7 +34,7 @@ bool d500_debug_protocol_calibration_engine::check_buffer_size_from_get_calib_st
 
 bool d500_debug_protocol_calibration_engine::check_buffer_size_hkr(std::vector<uint8_t> res) const
 {
-    // D5x5 HKR-new TC (RSDEV-9362): 3-byte header for IDLE/PROCESS, 535 bytes from HEALTH_CHECK onward
+    // D5x5 HKR-new TC: 3-byte header for IDLE/PROCESS, 535 bytes from HEALTH_CHECK onward
     // (3 header + 20 health + 512 candidate/committed table).
     if (res.size() < 2)
         return false;
@@ -63,19 +65,30 @@ void d500_debug_protocol_calibration_engine::update_triggered_calibration_status
         if (!check_buffer_size_hkr(res))
             throw std::runtime_error("GET_CALIB_STATUS (HKR) returned struct with wrong size");
 
-        // Re-map wire state byte to enum: on the HKR path, byte 2 -> HEALTH_CHECK, byte 3 -> FLASH_UPDATE, byte 4 -> COMPLETE.
-        auto raw = *reinterpret_cast<hkr_calibration_answer*>(res.data());
-        switch (static_cast<uint8_t>(raw.state))
+        // Header (3 bytes) is always present; health + candidate table (532 more) only from HEALTH_CHECK onward.
+        _hkr_ans = {};
+        _hkr_ans.state    = static_cast<calibration_state >(res[0]);
+        _hkr_ans.progress = static_cast<int8_t             >(res[1]);
+        _hkr_ans.result   = static_cast<calibration_result >(res[2]);
+        if (res.size() == sizeof(hkr_calibration_answer))
         {
-            case 0: raw.state = calibration_state::IDLE;         break;
-            case 1: raw.state = calibration_state::PROCESS;      break;
-            case 2: raw.state = calibration_state::HEALTH_CHECK; break;
-            case 3: raw.state = calibration_state::FLASH_UPDATE; break;
-            case 4: raw.state = calibration_state::COMPLETE;     break;
+            constexpr size_t health_off = 3;
+            constexpr size_t table_off  = 3 + sizeof(calibration_health_metrics);
+            std::memcpy(&_hkr_ans.health, res.data() + health_off, sizeof(_hkr_ans.health));
+            std::memcpy(&_hkr_ans.depth_calibration, res.data() + table_off, sizeof(_hkr_ans.depth_calibration));
+        }
+
+        // Re-map wire state byte to enum: on the HKR path, byte 2 means HEALTH_CHECK, byte 3 FLASH_UPDATE, byte 4 COMPLETE.
+        switch (static_cast<uint8_t>(_hkr_ans.state))
+        {
+            case 0: _hkr_ans.state = calibration_state::IDLE;         break;
+            case 1: _hkr_ans.state = calibration_state::PROCESS;      break;
+            case 2: _hkr_ans.state = calibration_state::HEALTH_CHECK; break;
+            case 3: _hkr_ans.state = calibration_state::FLASH_UPDATE; break;
+            case 4: _hkr_ans.state = calibration_state::COMPLETE;     break;
             default:
                 throw std::runtime_error("GET_CALIB_STATUS (HKR) returned unknown state byte");
         }
-        _hkr_ans = raw;
         return;
     }
 

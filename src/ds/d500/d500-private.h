@@ -82,7 +82,7 @@ namespace librealsense
             D585_3C_PROTO_PID
         };
 
-        // D5x5 (non-safety, non-legacy) HKR-new Triggered Calibration flow (RSDEV-9362).
+        // D5x5 (non-safety, non-legacy) HKR-new Triggered Calibration flow.
         // D555 stays on the D400 OCC path; D585S and D585_LEGACY_PID stay on the current D500 TC flow.
         static const std::set<std::uint16_t> d5x5_hkr_new_tc_pids = {
             D535_2C_PID,

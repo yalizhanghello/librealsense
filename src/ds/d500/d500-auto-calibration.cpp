@@ -121,8 +121,10 @@ namespace librealsense
             throw std::runtime_error("run_on_chip_calibration called with wrong content in json file");
 
         // "unattended": true selects CommitTrigger::UNATTENDED, otherwise HEALTH_GATED (default).
-        _commit_trigger = (json.find("\"unattended\"") != std::string::npos && json.find("true") != std::string::npos)
-                          ? commit_trigger::UNATTENDED : commit_trigger::HEALTH_GATED;
+        // Match the whole key-value substring so an unrelated `true` elsewhere in the JSON does not flip the flag.
+        const bool unattended = json.find("\"unattended\": true") != std::string::npos
+                             || json.find("\"unattended\":true")  != std::string::npos;
+        _commit_trigger = unattended ? commit_trigger::UNATTENDED : commit_trigger::HEALTH_GATED;
     }
 
     std::vector<uint8_t> d500_auto_calibrated::run_on_chip_calibration( int timeout_ms,
@@ -206,7 +208,10 @@ namespace librealsense
             if( progress_callback )
                 progress_callback->on_update_progress( _calib_engine->get_triggered_calibration_progress() );
 
-            if( _result == calibration_result::FAILED_TO_RUN )
+            // Either failure result should break the loop; otherwise a stuck-in-PROCESS + failed result would spin until timeout.
+            // FAILED_TO_CONVERGE is a legitimate outcome at HEALTH_CHECK — surfaced to the caller via _result rather than throwing here.
+            if( _result == calibration_result::FAILED_TO_RUN
+                || _result == calibration_result::FAILED_TO_CONVERGE )
                 break;
 
             // Terminal states depend on the mode:

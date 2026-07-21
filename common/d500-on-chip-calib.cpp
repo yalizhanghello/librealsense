@@ -32,6 +32,8 @@ namespace rs2
         case RS2_CALIB_ACTION_ON_CHIP_CALIB_COMMIT:  ss << "{\n calib commit }";   break;
         case RS2_CALIB_ACTION_ON_CHIP_CALIB_TRY_NEW: ss << "{\n calib try new }";  break;
         case RS2_CALIB_ACTION_ON_CHIP_CALIB_TRY_OLD: ss << "{\n calib try old }";  break;
+        default:
+            throw std::runtime_error("unknown calib_action in convert_action_to_json_string");
         }
         return ss.str();
     }
