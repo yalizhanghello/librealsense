@@ -13,15 +13,16 @@ enum class calibration_state : uint8_t
 {
     IDLE = 0,
     PROCESS,
-    SUCCESS,
-    FAILURE,
+    SUCCESS,        // D585S wire byte 2 — legacy TC
+    FAILURE,        // D585S wire byte 3 — legacy TC
     FLASH_UPDATE,
-    COMPLETE
+    COMPLETE,
+    HEALTH_CHECK    // D5x5 HKR-new TC only — candidate cached in RAM, awaiting host COMMIT/CANCEL. Synthesized from wire byte 2 when parsing the new reply format; never sent on the legacy D585S path.
 };
 
 enum class calibration_result : uint8_t
 {
-    UNKNOWN = 0,
+    UNKNOWN = 0,    // aka INIT in the D5x5 HKR spec — same wire value
     SUCCESS,
     FAILED_TO_CONVERGE,
     FAILED_TO_RUN
@@ -31,9 +32,38 @@ enum class calibration_mode
 {
     RESERVED = 0,
     RUN,
-    ABORT,
-    DRY_RUN
+    ABORT,          // D585S semantics. D5x5 HKR-new TC broadens this to CANCEL (valid from any state except FLASH_UPDATE). Wire value 2 on both paths.
+    DRY_RUN,
+    COMMIT,         // D5x5 HKR-new TC only — host approves the HEALTH_CHECK-cached candidate; device flashes it, no payload.
+    TRY             // D5x5 HKR-new TC only — apply NEW/OLD table live to RAM for preview, sub-selection in payload.
 };
+
+// D5x5 HKR-new TC only. Sub-selection for calibration_mode::TRY. Wire byte carried alongside mode.
+enum class try_calibration_selection : uint8_t
+{
+    NEW = 0,        // apply the HEALTH_CHECK-cached candidate live for comparison
+    OLD = 1         // re-apply the currently-committed flash table live, undoing a prior NEW
+};
+
+// D5x5 HKR-new TC only. Selects who triggers the flash commit after HEALTH_CHECK.
+// Ignored when calibration_mode == DRY_RUN.
+enum class commit_trigger : uint8_t
+{
+    HEALTH_GATED = 0,   // device waits at HEALTH_CHECK for a host-issued COMMIT (default)
+    UNATTENDED = 1      // device auto-commits on SUCCESS, preserving today's D585S behavior
+};
+
+// D5x5 HKR-new TC only. Populated by firmware at HEALTH_CHECK/COMPLETE. Wire-format struct — do not reorder.
+#pragma pack(push, 1)
+struct calibration_health_metrics
+{
+    float coverage_safe_for_depth;   // [0,1]  — pass: >= Coverage_Threshold (0.50)
+    float rect_health;               // px    — pass: <  RectThreshold (0.40, provisional)
+    float rect_improvement;          // px    — informational only
+    float scale_health;              // px    — pass: <  ScaleThreshold (0.50, provisional)
+    float scale_improvement;         // px    — informational only
+};
+#pragma pack(pop)
 
 class calibration_engine_interface
 {
@@ -47,6 +77,12 @@ public:
     virtual void write_calibration(std::vector<uint8_t>& calibration) const = 0;
     virtual std::string get_calibration_config() const = 0;
     virtual void set_calibration_config(const std::string& calibration_config_json_str) const = 0;
+
+    // D5x5 HKR-new TC — no-op / not supported on the legacy D585S path by default.
+    virtual void set_hkr_new_tc_enabled( bool ) {}
+    virtual bool is_hkr_new_tc_enabled() const { return false; }
+    virtual calibration_health_metrics get_triggered_calibration_health() const { return {}; }
+    virtual std::vector<uint8_t> run_triggered_calibration_try( try_calibration_selection ) { return {}; }
 };
 
 } // namespace librealsense

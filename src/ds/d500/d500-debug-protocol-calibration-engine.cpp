@@ -30,6 +30,20 @@ bool d500_debug_protocol_calibration_engine::check_buffer_size_from_get_calib_st
     return is_size_ok;
 }
 
+bool d500_debug_protocol_calibration_engine::check_buffer_size_hkr(std::vector<uint8_t> res) const
+{
+    // D5x5 HKR-new TC (RSDEV-9362): 3-byte header for IDLE/PROCESS, 535 bytes from HEALTH_CHECK onward
+    // (3 header + 20 health + 512 candidate/committed table).
+    if (res.size() < 2)
+        return false;
+
+    // Wire state byte 2 on this path means HEALTH_CHECK, not SUCCESS. Anything at or beyond that carries the full payload.
+    const bool has_payload = res[0] >= 2;
+    if (!has_payload)
+        return res.size() == (sizeof(hkr_calibration_answer) - sizeof(calibration_health_metrics) - sizeof(ds::d500_coefficients_table));
+    return res.size() == sizeof(hkr_calibration_answer);
+}
+
 void d500_debug_protocol_calibration_engine::update_triggered_calibration_status()
 {
     if (!_dev)
@@ -44,6 +58,27 @@ void d500_debug_protocol_calibration_engine::update_triggered_calibration_status
     // slicing 4 first bytes - opcode
     res.erase(res.begin(), res.begin() + 4);
 
+    if (_hkr_new_tc)
+    {
+        if (!check_buffer_size_hkr(res))
+            throw std::runtime_error("GET_CALIB_STATUS (HKR) returned struct with wrong size");
+
+        // Re-map wire state byte to enum: on the HKR path, byte 2 -> HEALTH_CHECK, byte 3 -> FLASH_UPDATE, byte 4 -> COMPLETE.
+        auto raw = *reinterpret_cast<hkr_calibration_answer*>(res.data());
+        switch (static_cast<uint8_t>(raw.state))
+        {
+            case 0: raw.state = calibration_state::IDLE;         break;
+            case 1: raw.state = calibration_state::PROCESS;      break;
+            case 2: raw.state = calibration_state::HEALTH_CHECK; break;
+            case 3: raw.state = calibration_state::FLASH_UPDATE; break;
+            case 4: raw.state = calibration_state::COMPLETE;     break;
+            default:
+                throw std::runtime_error("GET_CALIB_STATUS (HKR) returned unknown state byte");
+        }
+        _hkr_ans = raw;
+        return;
+    }
+
     // checking size of received buffer
     if (!check_buffer_size_from_get_calib_status(res))
         throw std::runtime_error("GET_CALIB_STATUS returned struct with wrong size");
@@ -55,23 +90,40 @@ void d500_debug_protocol_calibration_engine::update_triggered_calibration_status
 std::vector<uint8_t> d500_debug_protocol_calibration_engine::run_triggered_calibration(calibration_mode _mode)
 {
     if (!_dev)
-        throw std::runtime_error("device has not been set"); 
-        
+        throw std::runtime_error("device has not been set");
+
     auto cmd = _dev->build_command(ds::SET_CALIB_MODE, static_cast<uint32_t>(_mode), 1 /*always*/);
+    return _dev->send_receive_raw_data(cmd);
+}
+
+std::vector<uint8_t> d500_debug_protocol_calibration_engine::run_triggered_calibration_try(try_calibration_selection selection)
+{
+    if (!_dev)
+        throw std::runtime_error("device has not been set");
+
+    // TRY carries the NEW/OLD selector as its sub-parameter, riding param2 (the same slot mode = 1 uses today).
+    auto cmd = _dev->build_command(ds::SET_CALIB_MODE,
+                                   static_cast<uint32_t>(calibration_mode::TRY),
+                                   static_cast<uint32_t>(selection));
     return _dev->send_receive_raw_data(cmd);
 }
 
 calibration_state d500_debug_protocol_calibration_engine::get_triggered_calibration_state() const
 {
-    return _calib_ans.state;
+    return _hkr_new_tc ? _hkr_ans.state : _calib_ans.state;
 }
 calibration_result d500_debug_protocol_calibration_engine::get_triggered_calibration_result() const
 {
-    return _calib_ans.result;
+    return _hkr_new_tc ? _hkr_ans.result : _calib_ans.result;
 }
 int8_t d500_debug_protocol_calibration_engine::get_triggered_calibration_progress() const
 {
-    return _calib_ans.progress;
+    return _hkr_new_tc ? _hkr_ans.progress : _calib_ans.progress;
+}
+
+calibration_health_metrics d500_debug_protocol_calibration_engine::get_triggered_calibration_health() const
+{
+    return _hkr_new_tc ? _hkr_ans.health : calibration_health_metrics{};
 }
 
 std::vector<uint8_t> d500_debug_protocol_calibration_engine::get_calibration_table(std::vector<uint8_t>& current_calibration) const
@@ -185,7 +237,7 @@ void d500_debug_protocol_calibration_engine::set_calibration_config(const std::s
 
 ds::d500_coefficients_table d500_debug_protocol_calibration_engine::get_depth_calibration() const
 {
-    return _calib_ans.depth_calibration;
+    return _hkr_new_tc ? _hkr_ans.depth_calibration : _calib_ans.depth_calibration;
 }
 
 }// namespace librealsense
