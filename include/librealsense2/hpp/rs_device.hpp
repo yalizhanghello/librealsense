@@ -394,6 +394,26 @@ namespace rs2
         }
     };
 
+    struct triggered_calibration_health
+    {
+        float coverage_safe_for_depth = 0.f;
+        float rect_health = 0.f;
+        float rect_improvement = 0.f;
+        float scale_health = 0.f;
+        float scale_improvement = 0.f;
+    };
+
+    struct triggered_calibration_status
+    {
+        rs2_triggered_calibration_state state = RS2_TRIGGERED_CALIBRATION_STATE_IDLE;
+        rs2_triggered_calibration_result result = RS2_TRIGGERED_CALIBRATION_RESULT_INIT;
+        int8_t progress = 0;
+        bool health_valid = false;
+        bool candidate_valid = false;
+        triggered_calibration_health health;
+        calibration_table candidate;
+    };
+
     class auto_calibrated_device : public calibrated_device
     {
     public:
@@ -516,6 +536,75 @@ namespace rs2
             results.insert(results.begin(), start, start + size);
 
             return results;
+        }
+
+        template< class T >
+        triggered_calibration_status run_triggered_calibration(
+            rs2_triggered_calibration_mode mode,
+            T callback,
+            int timeout_ms = 5000 ) const
+        {
+            rs2_triggered_calibration_request request{ mode };
+            rs2_triggered_calibration_status status{};
+            rs2_error * e = nullptr;
+            auto buffer = rs2_run_triggered_calibration_cpp(
+                _dev.get(),
+                &request,
+                &status,
+                new update_progress_callback< T >( std::move( callback ) ),
+                timeout_ms,
+                &e );
+            error::handle( e );
+            std::shared_ptr< const rs2_raw_data_buffer > data( buffer, rs2_delete_raw_data );
+
+            triggered_calibration_status result;
+            result.state = status.state;
+            result.result = status.result;
+            result.progress = status.progress;
+            result.health_valid = status.health_valid != 0;
+            result.candidate_valid = status.candidate_valid != 0;
+            result.health = { status.health.coverage_safe_for_depth,
+                              status.health.rect_health,
+                              status.health.rect_improvement,
+                              status.health.scale_health,
+                              status.health.scale_improvement };
+            auto size = rs2_get_raw_data_size( data.get(), &e );
+            error::handle( e );
+            auto start = rs2_get_raw_data( data.get(), &e );
+            error::handle( e );
+            result.candidate.assign( start, start + size );
+            return result;
+        }
+
+        triggered_calibration_status run_triggered_calibration(
+            rs2_triggered_calibration_mode mode,
+            int timeout_ms = 5000 ) const
+        {
+            rs2_triggered_calibration_request request{ mode };
+            rs2_triggered_calibration_status status{};
+            rs2_error * e = nullptr;
+            auto buffer = rs2_run_triggered_calibration_cpp(
+                _dev.get(), &request, &status, nullptr, timeout_ms, &e );
+            error::handle( e );
+            std::shared_ptr< const rs2_raw_data_buffer > data( buffer, rs2_delete_raw_data );
+
+            triggered_calibration_status result;
+            result.state = status.state;
+            result.result = status.result;
+            result.progress = status.progress;
+            result.health_valid = status.health_valid != 0;
+            result.candidate_valid = status.candidate_valid != 0;
+            result.health = { status.health.coverage_safe_for_depth,
+                              status.health.rect_health,
+                              status.health.rect_improvement,
+                              status.health.scale_health,
+                              status.health.scale_improvement };
+            auto size = rs2_get_raw_data_size( data.get(), &e );
+            error::handle( e );
+            auto start = rs2_get_raw_data( data.get(), &e );
+            error::handle( e );
+            result.candidate.assign( start, start + size );
+            return result;
         }
 
         /**

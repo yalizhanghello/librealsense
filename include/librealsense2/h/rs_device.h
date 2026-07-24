@@ -368,6 +368,81 @@ const rs2_raw_data_buffer* rs2_run_on_chip_calibration_cpp(rs2_device* device, c
 */
 const rs2_raw_data_buffer* rs2_run_on_chip_calibration(rs2_device* device, const void* json_content, int content_size, float* health, rs2_update_progress_callback_ptr callback, void* client_data, int timeout_ms, rs2_error** error);
 
+typedef enum rs2_triggered_calibration_mode
+{
+    RS2_TRIGGERED_CALIBRATION_MODE_RESERVED = 0,
+    RS2_TRIGGERED_CALIBRATION_MODE_RUN = 1,
+    RS2_TRIGGERED_CALIBRATION_MODE_CANCEL = 2,
+    RS2_TRIGGERED_CALIBRATION_MODE_DRY_RUN = 3,
+    RS2_TRIGGERED_CALIBRATION_MODE_COMMIT = 4,
+    RS2_TRIGGERED_CALIBRATION_MODE_COUNT
+} rs2_triggered_calibration_mode;
+
+typedef enum rs2_triggered_calibration_state
+{
+    RS2_TRIGGERED_CALIBRATION_STATE_IDLE = 0,
+    RS2_TRIGGERED_CALIBRATION_STATE_PROCESS = 1,
+    RS2_TRIGGERED_CALIBRATION_STATE_HEALTH_CHECK = 2,
+    RS2_TRIGGERED_CALIBRATION_STATE_FLASH_UPDATE = 3,
+    RS2_TRIGGERED_CALIBRATION_STATE_COMPLETE = 4,
+    RS2_TRIGGERED_CALIBRATION_STATE_COUNT
+} rs2_triggered_calibration_state;
+
+typedef enum rs2_triggered_calibration_result
+{
+    RS2_TRIGGERED_CALIBRATION_RESULT_INIT = 0,
+    RS2_TRIGGERED_CALIBRATION_RESULT_SUCCESS = 1,
+    RS2_TRIGGERED_CALIBRATION_RESULT_FAILED_TO_CONVERGE = 2,
+    RS2_TRIGGERED_CALIBRATION_RESULT_FAILED_TO_RUN = 3,
+    RS2_TRIGGERED_CALIBRATION_RESULT_COUNT
+} rs2_triggered_calibration_result;
+
+typedef struct rs2_triggered_calibration_health
+{
+    float coverage_safe_for_depth;
+    float rect_health;
+    float rect_improvement;
+    float scale_health;
+    float scale_improvement;
+} rs2_triggered_calibration_health;
+
+typedef struct rs2_triggered_calibration_request
+{
+    rs2_triggered_calibration_mode mode;
+} rs2_triggered_calibration_request;
+
+typedef struct rs2_triggered_calibration_status
+{
+    rs2_triggered_calibration_state state;
+    rs2_triggered_calibration_result result;
+    signed char progress;
+    int health_valid;
+    int candidate_valid;
+    rs2_triggered_calibration_health health;
+} rs2_triggered_calibration_status;
+
+/**
+ * Run a typed triggered-calibration operation.
+ * The returned buffer contains an owned candidate calibration table only when status.candidate_valid is non-zero.
+ */
+const rs2_raw_data_buffer* rs2_run_triggered_calibration_cpp(
+    rs2_device* device,
+    const rs2_triggered_calibration_request* request,
+    rs2_triggered_calibration_status* status,
+    rs2_update_progress_callback* progress_callback,
+    int timeout_ms,
+    rs2_error** error);
+
+/** Run a typed triggered-calibration operation with a C progress callback. */
+const rs2_raw_data_buffer* rs2_run_triggered_calibration(
+    rs2_device* device,
+    const rs2_triggered_calibration_request* request,
+    rs2_triggered_calibration_status* status,
+    rs2_update_progress_callback_ptr progress_callback,
+    void* client_data,
+    int timeout_ms,
+    rs2_error** error);
+
 /**
 * This will adjust camera absolute distance to flat target. User needs to enter the known ground truth.
 * \param[in] ground_truth_mm     Ground truth in mm must be between 60 and 10000

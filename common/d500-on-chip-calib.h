@@ -4,9 +4,9 @@
 #pragma once
 
 #include "notifications.h"
+#include <src/ds/d500/d500-private.h>
 #include <rsutils/concurrency/concurrency.h>
 #include "../src/algo.h"
-#include <set>
 
 #include <random>
 #include <string>
@@ -32,9 +32,7 @@ namespace rs2
             RS2_CALIB_ACTION_ON_CHIP_CALIB,         // On-Chip calibration
             RS2_CALIB_ACTION_ON_CHIP_CALIB_DRY_RUN, // Dry Run
             RS2_CALIB_ACTION_ON_CHIP_CALIB_ABORT,   // Abort
-            RS2_CALIB_ACTION_ON_CHIP_CALIB_COMMIT,  // D5x5 HKR-new only — approve HEALTH_CHECK candidate
-            RS2_CALIB_ACTION_ON_CHIP_CALIB_TRY_NEW, // D5x5 HKR-new only — preview new candidate live
-            RS2_CALIB_ACTION_ON_CHIP_CALIB_TRY_OLD  // D5x5 HKR-new only — restore currently-committed table live
+            RS2_CALIB_ACTION_ON_CHIP_CALIB_COMMIT   // D5x5 HKR-new only — approve HEALTH_CHECK candidate
         };
 
         calib_action action = RS2_CALIB_ACTION_ON_CHIP_CALIB;
@@ -50,13 +48,12 @@ namespace rs2
         // out-param of run_on_chip_calibration — the full CalibrationHealthMetrics struct requires an SDK-internal
         // include, deliberately not surfaced through common/ to avoid a public API addition.
         bool uses_hkr_new_tc() const;
-        float get_scalar_health() const { return _scalar_health; }
-        bool health_passes() const { return _scalar_health >= 0.f && _scalar_health < 0.4f; }  // provisional per spec §5.5
+        const triggered_calibration_status & get_triggered_status() const { return _triggered_status; }
 
     private:
         void process_flow(std::function<void()> cleanup, invoker invoke) override;
         std::string convert_action_to_json_string();
-        float _scalar_health = -1.f;
+        triggered_calibration_status _triggered_status;
 
         template<class T>
         void set_option_if_needed(T& sensor, rs2_option opt, float required_value);

@@ -42,7 +42,6 @@ namespace librealsense
         , _depth_sensor( ds )
         , _debug_dev( debug_dev )
         , _try_selection( try_calibration_selection::NEW )
-        , _commit_trigger( commit_trigger::HEALTH_GATED )
     {
         if( ! _debug_dev )
             throw not_implemented_exception( " debug_interface must be supplied to d500_auto_calibrated" );
@@ -53,15 +52,7 @@ namespace librealsense
         auto dev = As< device >( _debug_dev );
         if( ! dev || ! dev->supports_info( RS2_CAMERA_INFO_PRODUCT_ID ) )
             return false;
-        try
-        {
-            auto pid = static_cast< uint16_t >( std::stoi( dev->get_info( RS2_CAMERA_INFO_PRODUCT_ID ), nullptr, 16 ) );
-            return ds::uses_hkr_new_tc( pid );
-        }
-        catch( ... )
-        {
-            return false;
-        }
+        return ds::uses_hkr_new_tc( dev->get_info( RS2_CAMERA_INFO_PRODUCT_ID ) );
     }
 
     void d500_auto_calibrated::check_preconditions_and_set_state()
@@ -120,11 +111,6 @@ namespace librealsense
         else
             throw std::runtime_error("run_on_chip_calibration called with wrong content in json file");
 
-        // "unattended": true selects CommitTrigger::UNATTENDED, otherwise HEALTH_GATED (default).
-        // Match the whole key-value substring so an unrelated `true` elsewhere in the JSON does not flip the flag.
-        const bool unattended = json.find("\"unattended\": true") != std::string::npos
-                             || json.find("\"unattended\":true")  != std::string::npos;
-        _commit_trigger = unattended ? commit_trigger::UNATTENDED : commit_trigger::HEALTH_GATED;
     }
 
     std::vector<uint8_t> d500_auto_calibrated::run_on_chip_calibration( int timeout_ms,
@@ -145,6 +131,65 @@ namespace librealsense
             return run_hkr_triggered_calibration( timeout_ms, json, health, progress_callback );
 
         return run_triggered_calibration( timeout_ms, json, progress_callback );
+    }
+
+    triggered_calibration_status d500_auto_calibrated::run_triggered_calibration(
+        int timeout_ms,
+        uint8_t mode_value,
+        rs2_update_progress_callback_sptr progress_callback )
+    {
+        if( ! device_uses_hkr_new_tc() )
+            throw std::runtime_error( "Triggered calibration is not supported by this device" );
+
+        const auto mode = static_cast< calibration_mode >( mode_value );
+        if( mode < calibration_mode::RUN || mode > calibration_mode::COMMIT )
+            throw std::runtime_error( "Invalid triggered calibration mode" );
+
+        _calib_engine->set_hkr_new_tc_enabled( true );
+        _mode = mode;
+
+        _calib_engine->run_triggered_calibration( mode );
+
+        if( mode == calibration_mode::ABORT )
+            update_abort_status();
+        else
+        {
+            update_hkr_calibration_status(
+                timeout_ms, mode == calibration_mode::COMMIT, false, progress_callback );
+        }
+
+        triggered_calibration_status status;
+        // calibration_state's ordinal values don't match rs2_triggered_calibration_state
+        // (HEALTH_CHECK is appended last to preserve legacy D585S SUCCESS/FAILURE slots) --
+        // map explicitly rather than casting the raw enum value.
+        switch( _state )
+        {
+        case calibration_state::IDLE:         status.state = RS2_TRIGGERED_CALIBRATION_STATE_IDLE; break;
+        case calibration_state::PROCESS:      status.state = RS2_TRIGGERED_CALIBRATION_STATE_PROCESS; break;
+        case calibration_state::HEALTH_CHECK: status.state = RS2_TRIGGERED_CALIBRATION_STATE_HEALTH_CHECK; break;
+        case calibration_state::FLASH_UPDATE: status.state = RS2_TRIGGERED_CALIBRATION_STATE_FLASH_UPDATE; break;
+        case calibration_state::COMPLETE:     status.state = RS2_TRIGGERED_CALIBRATION_STATE_COMPLETE; break;
+        default:
+            throw std::runtime_error( "Unexpected triggered calibration state" );
+        }
+        status.result = static_cast< uint8_t >( _result );
+        status.progress = _calib_engine->get_triggered_calibration_progress();
+        status.health_valid = _state == calibration_state::HEALTH_CHECK
+                           || _state == calibration_state::COMPLETE;
+        status.candidate_valid = status.health_valid;
+        if( status.health_valid )
+        {
+            const auto health = _calib_engine->get_triggered_calibration_health();
+            status.health[0] = health.coverage_safe_for_depth;
+            status.health[1] = health.rect_health;
+            status.health[2] = health.rect_improvement;
+            status.health[3] = health.scale_health;
+            status.health[4] = health.scale_improvement;
+            const auto candidate = _calib_engine->get_depth_calibration();
+            const auto bytes = reinterpret_cast< const uint8_t * >( &candidate );
+            status.candidate.assign( bytes, bytes + sizeof( candidate ) );
+        }
+        return status;
     }
 
     std::vector< uint8_t > d500_auto_calibrated::run_hkr_triggered_calibration( int timeout_ms,
@@ -172,8 +217,8 @@ namespace librealsense
                 return update_abort_status();
 
             // RUN / DRY_RUN / COMMIT — poll until we hit a terminal state for this mode.
-            const bool unattended = ( _commit_trigger == commit_trigger::UNATTENDED ) || ( _mode == calibration_mode::COMMIT );
-            auto res = update_hkr_calibration_status( timeout_ms, unattended, progress_callback );
+            auto res = update_hkr_calibration_status(
+                timeout_ms, _mode == calibration_mode::COMMIT, true, progress_callback );
 
             if( health )
             {
@@ -203,7 +248,8 @@ namespace librealsense
     }
 
     std::vector< uint8_t > d500_auto_calibrated::update_hkr_calibration_status( int timeout_ms,
-                                                                                bool unattended,
+                                                                                bool wait_for_complete,
+                                                                                bool throw_on_failure,
                                                                                 rs2_update_progress_callback_sptr progress_callback )
     {
         auto start_time = std::chrono::high_resolution_clock::now();
@@ -224,15 +270,12 @@ namespace librealsense
                 || _result == calibration_result::FAILED_TO_CONVERGE )
                 break;
 
-            // Terminal states depend on the mode:
-            // - Gated RUN/DRY_RUN: stop at HEALTH_CHECK — host inspects health then calls again with commit/cancel.
-            // - Unattended RUN: stop at COMPLETE (device auto-commits) or IDLE (nothing to persist).
-            // - COMMIT: stop at COMPLETE.
+            // RUN/DRY_RUN stop at HEALTH_CHECK for host approval. COMMIT waits for COMPLETE.
             if( _state == calibration_state::IDLE )
                 break;
             if( _state == calibration_state::COMPLETE )
                 break;
-            if( ! unattended && _state == calibration_state::HEALTH_CHECK )
+            if( ! wait_for_complete && _state == calibration_state::HEALTH_CHECK )
                 break;
 
             if( std::chrono::high_resolution_clock::now() - start_time > std::chrono::milliseconds( timeout_ms ) )
@@ -245,11 +288,13 @@ namespace librealsense
             auto depth_calib = _calib_engine->get_depth_calibration();
             auto ptr = reinterpret_cast< uint8_t * >( &depth_calib );
             res.insert( res.begin(), ptr, ptr + sizeof( ds::d500_coefficients_table ) );
+
         }
-        else if( _result == calibration_result::FAILED_TO_RUN )
-        {
+
+        if( throw_on_failure && _result == calibration_result::FAILED_TO_CONVERGE )
+            throw std::runtime_error( "HKR triggered calibration failed to converge" );
+        if( throw_on_failure && _result == calibration_result::FAILED_TO_RUN )
             throw std::runtime_error( "HKR triggered calibration failed to run" );
-        }
 
         return res;
     }
@@ -423,7 +468,9 @@ namespace librealsense
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             _calib_engine->update_triggered_calibration_status();
         }
-        if (_calib_engine->get_triggered_calibration_state() == calibration_state::IDLE)
+        _state = _calib_engine->get_triggered_calibration_state();
+        _result = _calib_engine->get_triggered_calibration_result();
+        if (_state == calibration_state::IDLE)
         {
             LOG_INFO("Depth Calibration Successfully Aborted");
             // returning success

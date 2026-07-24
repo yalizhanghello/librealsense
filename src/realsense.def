@@ -404,6 +404,8 @@ EXPORTS
 
     rs2_run_on_chip_calibration
     rs2_run_on_chip_calibration_cpp
+    rs2_run_triggered_calibration
+    rs2_run_triggered_calibration_cpp
     rs2_run_tare_calibration
     rs2_run_tare_calibration_cpp
     rs2_process_calibration_frame

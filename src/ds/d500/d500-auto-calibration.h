@@ -23,6 +23,10 @@ namespace librealsense
                               sensor_base * ds = nullptr );
         void write_calibration() const override;
         std::vector<uint8_t> run_on_chip_calibration(int timeout_ms, std::string json, float* const health, rs2_update_progress_callback_sptr progress_callback) override;
+        triggered_calibration_status run_triggered_calibration(
+            int timeout_ms,
+            uint8_t mode,
+            rs2_update_progress_callback_sptr progress_callback ) override;
         std::vector<uint8_t> run_tare_calibration(int timeout_ms, float ground_truth_mm, std::string json, float* const health, rs2_update_progress_callback_sptr progress_callback) override;
         std::vector<uint8_t> process_calibration_frame(int timeout_ms, const rs2_frame* f, float* const health, rs2_update_progress_callback_sptr progress_callback) override;
         std::vector<uint8_t> get_calibration_table() const override;
@@ -48,13 +52,14 @@ namespace librealsense
         std::vector< uint8_t > run_hkr_triggered_calibration( int timeout_ms, std::string json,
                                                               float * const health,
                                                               rs2_update_progress_callback_sptr progress_callback );
-        std::vector< uint8_t > update_hkr_calibration_status( int timeout_ms, bool unattended,
+        std::vector< uint8_t > update_hkr_calibration_status( int timeout_ms,
+                                                              bool wait_for_complete,
+                                                              bool throw_on_failure,
                                                               rs2_update_progress_callback_sptr progress_callback );
         std::vector< uint8_t > run_occ( int timeout_ms, std::string json, float * const health,
                                         rs2_update_progress_callback_sptr progress_callback );
         bool device_uses_hkr_new_tc() const;
         try_calibration_selection _try_selection;
-        commit_trigger _commit_trigger;
         ds_calib_common::dsc_check_status_result get_calibration_status( int timeout_ms,
                                                             std::function< void( const int count ) > progress_func,
                                                             bool wait_for_final_results = true ) const;

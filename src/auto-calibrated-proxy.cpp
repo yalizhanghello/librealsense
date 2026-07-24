@@ -23,6 +23,16 @@ std::vector<uint8_t> auto_calibrated_proxy::run_on_chip_calibration(int timeout_
     throw std::runtime_error("Auto Calibration capability has not been initiated");
 }
 
+triggered_calibration_status auto_calibrated_proxy::run_triggered_calibration(
+    int timeout_ms,
+    uint8_t mode,
+    rs2_update_progress_callback_sptr progress_callback )
+{
+    if( _auto_calib_capability )
+        return _auto_calib_capability->run_triggered_calibration( timeout_ms, mode, progress_callback );
+    throw std::runtime_error( "Auto Calibration capability has not been initiated" );
+}
+
 void auto_calibrated_proxy::set_auto_calibration_capability(std::shared_ptr<auto_calibrated_interface> ac_cap)
 {
     _auto_calib_capability = ac_cap;

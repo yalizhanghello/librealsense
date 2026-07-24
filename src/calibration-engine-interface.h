@@ -45,14 +45,6 @@ enum class try_calibration_selection : uint8_t
     OLD = 1         // re-apply the currently-committed flash table live, undoing a prior NEW
 };
 
-// D5x5 HKR-new TC only. Selects who triggers the flash commit after HEALTH_CHECK.
-// Ignored when calibration_mode == DRY_RUN.
-enum class commit_trigger : uint8_t
-{
-    HEALTH_GATED = 0,   // device waits at HEALTH_CHECK for a host-issued COMMIT (default)
-    UNATTENDED = 1      // device auto-commits on SUCCESS, preserving today's D585S behavior
-};
-
 // D5x5 HKR-new TC only. Populated by firmware at HEALTH_CHECK/COMPLETE. Wire-format struct — do not reorder.
 #pragma pack(push, 1)
 struct calibration_health_metrics

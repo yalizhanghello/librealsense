@@ -5,11 +5,55 @@
 #include <src/ds/d500/d500-types/calibration-config.h>
 #include "d500-device.h"
 
+#include <cmath>
 #include <cstring>
+
+#include <rsutils/string/from.h>
 
 
 namespace librealsense
 {
+namespace
+{
+constexpr size_t hkr_status_header_size = 3;
+constexpr size_t hkr_status_health_size = 5 * sizeof( float );
+constexpr size_t hkr_status_candidate_size = 512;
+constexpr size_t hkr_status_payload_size = hkr_status_header_size
+                                         + hkr_status_health_size
+                                         + hkr_status_candidate_size;
+
+float read_little_endian_float( const uint8_t * data )
+{
+    const uint32_t bits = static_cast< uint32_t >( data[0] )
+                        | static_cast< uint32_t >( data[1] ) << 8
+                        | static_cast< uint32_t >( data[2] ) << 16
+                        | static_cast< uint32_t >( data[3] ) << 24;
+    float value;
+    std::memcpy( &value, &bits, sizeof( value ) );
+    return value;
+}
+
+// SET_CALIB_MODE echoes back its own opcode (ds::SET_CALIB_MODE) as the first 4 bytes on success.
+// On rejection the device instead returns the negated mapped HWM error code in that same field --
+// this was previously discarded by the caller, silently swallowing rejected RUN/COMMIT/CANCEL/TRY
+// requests (the subsequent status poll would just report whatever state/result was already there).
+void throw_if_set_calib_mode_rejected( const std::vector< uint8_t > & res )
+{
+    if( res.size() < 4 )
+        throw std::runtime_error( "SET_CALIB_MODE returned truncated response" );
+    int32_t code = 0;
+    std::memcpy( &code, res.data(), sizeof( code ) );
+    if( code != static_cast< int32_t >( ds::SET_CALIB_MODE ) )
+        throw std::runtime_error( rsutils::string::from()
+            << "SET_CALIB_MODE rejected by device (error code " << -code << ")" );
+}
+}
+
+static_assert( sizeof( calibration_health_metrics ) == hkr_status_health_size,
+               "HKR calibration health wire size changed" );
+static_assert( sizeof( ds::d500_coefficients_table ) == hkr_status_candidate_size,
+               "HKR calibration candidate wire size changed" );
+
 bool d500_debug_protocol_calibration_engine::check_buffer_size_from_get_calib_status(std::vector<uint8_t> res) const
 {
     // the GET_CALIB_STATUS command will return:
@@ -34,16 +78,23 @@ bool d500_debug_protocol_calibration_engine::check_buffer_size_from_get_calib_st
 
 bool d500_debug_protocol_calibration_engine::check_buffer_size_hkr(std::vector<uint8_t> res) const
 {
-    // D5x5 HKR-new TC: 3-byte header for IDLE/PROCESS, 535 bytes from HEALTH_CHECK onward
-    // (3 header + 20 health + 512 candidate/committed table).
-    if (res.size() < 2)
+    // D5x5 HKR-new TC: IDLE/PROCESS/FLASH_UPDATE carry only the 3-byte header;
+    // HEALTH_CHECK/COMPLETE also carry health and the candidate/committed table.
+    if (res.size() < hkr_status_header_size)
         return false;
 
-    // Wire state byte 2 on this path means HEALTH_CHECK, not SUCCESS. Anything at or beyond that carries the full payload.
-    const bool has_payload = res[0] >= 2;
-    if (!has_payload)
-        return res.size() == (sizeof(hkr_calibration_answer) - sizeof(calibration_health_metrics) - sizeof(ds::d500_coefficients_table));
-    return res.size() == sizeof(hkr_calibration_answer);
+    switch (res[0])
+    {
+        case 0:  // IDLE
+        case 1:  // PROCESS
+        case 3:  // FLASH_UPDATE
+            return res.size() == hkr_status_header_size;
+        case 2:  // HEALTH_CHECK
+        case 4:  // COMPLETE
+            return res.size() == hkr_status_payload_size;
+        default:
+            return false;
+    }
 }
 
 void d500_debug_protocol_calibration_engine::update_triggered_calibration_status()
@@ -70,12 +121,26 @@ void d500_debug_protocol_calibration_engine::update_triggered_calibration_status
         _hkr_ans.state    = static_cast<calibration_state >(res[0]);
         _hkr_ans.progress = static_cast<int8_t             >(res[1]);
         _hkr_ans.result   = static_cast<calibration_result >(res[2]);
-        if (res.size() == sizeof(hkr_calibration_answer))
+        if (res[2] > static_cast< uint8_t >( calibration_result::FAILED_TO_RUN ))
+            throw std::runtime_error("GET_CALIB_STATUS (HKR) returned unknown result byte");
+
+        if (res.size() == hkr_status_payload_size)
         {
-            constexpr size_t health_off = 3;
-            constexpr size_t table_off  = 3 + sizeof(calibration_health_metrics);
-            std::memcpy(&_hkr_ans.health, res.data() + health_off, sizeof(_hkr_ans.health));
-            std::memcpy(&_hkr_ans.depth_calibration, res.data() + table_off, sizeof(_hkr_ans.depth_calibration));
+            float * const health[] = { &_hkr_ans.health.coverage_safe_for_depth,
+                                       &_hkr_ans.health.rect_health,
+                                       &_hkr_ans.health.rect_improvement,
+                                       &_hkr_ans.health.scale_health,
+                                       &_hkr_ans.health.scale_improvement };
+            for( size_t index = 0; index < 5; ++index )
+            {
+                *health[index] = read_little_endian_float(
+                    res.data() + hkr_status_header_size + index * sizeof( float ) );
+                if( ! std::isfinite( *health[index] ) )
+                    throw std::runtime_error("GET_CALIB_STATUS (HKR) returned non-finite health value");
+            }
+            std::memcpy( &_hkr_ans.depth_calibration,
+                         res.data() + hkr_status_header_size + hkr_status_health_size,
+                         hkr_status_candidate_size );
         }
 
         // Re-map wire state byte to enum: on the HKR path, byte 2 means HEALTH_CHECK, byte 3 FLASH_UPDATE, byte 4 COMPLETE.
@@ -100,13 +165,19 @@ void d500_debug_protocol_calibration_engine::update_triggered_calibration_status
 }
 
 
-std::vector<uint8_t> d500_debug_protocol_calibration_engine::run_triggered_calibration(calibration_mode _mode)
+std::vector<uint8_t> d500_debug_protocol_calibration_engine::run_triggered_calibration(
+    calibration_mode _mode)
 {
     if (!_dev)
         throw std::runtime_error("device has not been set");
 
-    auto cmd = _dev->build_command(ds::SET_CALIB_MODE, static_cast<uint32_t>(_mode), 1 /*always*/);
-    return _dev->send_receive_raw_data(cmd);
+    auto cmd = _dev->build_command(ds::SET_CALIB_MODE,
+                                   static_cast<uint32_t>(_mode),
+                                   1,
+                                   0);
+    auto res = _dev->send_receive_raw_data(cmd);
+    throw_if_set_calib_mode_rejected(res);
+    return res;
 }
 
 std::vector<uint8_t> d500_debug_protocol_calibration_engine::run_triggered_calibration_try(try_calibration_selection selection)
@@ -114,11 +185,13 @@ std::vector<uint8_t> d500_debug_protocol_calibration_engine::run_triggered_calib
     if (!_dev)
         throw std::runtime_error("device has not been set");
 
-    // TRY carries the NEW/OLD selector as its sub-parameter, riding param2 (the same slot mode = 1 uses today).
     auto cmd = _dev->build_command(ds::SET_CALIB_MODE,
                                    static_cast<uint32_t>(calibration_mode::TRY),
+                                   1,
                                    static_cast<uint32_t>(selection));
-    return _dev->send_receive_raw_data(cmd);
+    auto res = _dev->send_receive_raw_data(cmd);
+    throw_if_set_calib_mode_rejected(res);
+    return res;
 }
 
 calibration_state d500_debug_protocol_calibration_engine::get_triggered_calibration_state() const

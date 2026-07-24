@@ -29,6 +29,10 @@ public:
         float target_width, float target_height, rs2_update_progress_callback_sptr progress_callback) override;
     std::string get_calibration_config() const override;
     void set_calibration_config(const std::string& calibration_config_json_str) const override;
+    triggered_calibration_status run_triggered_calibration(
+        int timeout_ms,
+        uint8_t mode,
+        rs2_update_progress_callback_sptr progress_callback ) override;
 
     void set_auto_calibration_capability(std::shared_ptr<auto_calibrated_interface> ac_cap);
 

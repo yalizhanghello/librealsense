@@ -100,6 +100,18 @@ namespace librealsense
             return d5x5_hkr_new_tc_pids.find( pid ) != d5x5_hkr_new_tc_pids.end();
         }
 
+        inline bool uses_hkr_new_tc( const std::string & pid )
+        {
+            try
+            {
+                return uses_hkr_new_tc( static_cast< uint16_t >( std::stoi( pid, nullptr, 16 ) ) );
+            }
+            catch( ... )
+            {
+                return false;
+            }
+        }
+
         static const std::map< std::uint16_t, std::string > rs500_sku_names = {
             { D555_PID,               "RealSense D555" },
             { D555_RECOVERY_PID,      "RealSense D555 Recovery" },

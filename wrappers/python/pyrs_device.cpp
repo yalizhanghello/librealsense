@@ -133,6 +133,37 @@ void init_device(py::module &m) {
              "Update an updatable device to the provided firmware. This call is executed on the caller's thread and provides progress notifications via the callback.",
              "fw_image"_a, "callback"_a, py::call_guard<py::gil_scoped_release>());
 
+    py::enum_< rs2_triggered_calibration_mode >( m, "triggered_calibration_mode" )
+        .value( "run", RS2_TRIGGERED_CALIBRATION_MODE_RUN )
+        .value( "cancel", RS2_TRIGGERED_CALIBRATION_MODE_CANCEL )
+        .value( "dry_run", RS2_TRIGGERED_CALIBRATION_MODE_DRY_RUN )
+        .value( "commit", RS2_TRIGGERED_CALIBRATION_MODE_COMMIT );
+    py::enum_< rs2_triggered_calibration_state >( m, "triggered_calibration_state" )
+        .value( "idle", RS2_TRIGGERED_CALIBRATION_STATE_IDLE )
+        .value( "process", RS2_TRIGGERED_CALIBRATION_STATE_PROCESS )
+        .value( "health_check", RS2_TRIGGERED_CALIBRATION_STATE_HEALTH_CHECK )
+        .value( "flash_update", RS2_TRIGGERED_CALIBRATION_STATE_FLASH_UPDATE )
+        .value( "complete", RS2_TRIGGERED_CALIBRATION_STATE_COMPLETE );
+    py::enum_< rs2_triggered_calibration_result >( m, "triggered_calibration_result" )
+        .value( "init", RS2_TRIGGERED_CALIBRATION_RESULT_INIT )
+        .value( "success", RS2_TRIGGERED_CALIBRATION_RESULT_SUCCESS )
+        .value( "failed_to_converge", RS2_TRIGGERED_CALIBRATION_RESULT_FAILED_TO_CONVERGE )
+        .value( "failed_to_run", RS2_TRIGGERED_CALIBRATION_RESULT_FAILED_TO_RUN );
+    py::class_< rs2::triggered_calibration_health >( m, "triggered_calibration_health" )
+        .def_readonly( "coverage_safe_for_depth", &rs2::triggered_calibration_health::coverage_safe_for_depth )
+        .def_readonly( "rect_health", &rs2::triggered_calibration_health::rect_health )
+        .def_readonly( "rect_improvement", &rs2::triggered_calibration_health::rect_improvement )
+        .def_readonly( "scale_health", &rs2::triggered_calibration_health::scale_health )
+        .def_readonly( "scale_improvement", &rs2::triggered_calibration_health::scale_improvement );
+    py::class_< rs2::triggered_calibration_status >( m, "triggered_calibration_status" )
+        .def_readonly( "state", &rs2::triggered_calibration_status::state )
+        .def_readonly( "result", &rs2::triggered_calibration_status::result )
+        .def_readonly( "progress", &rs2::triggered_calibration_status::progress )
+        .def_readonly( "health_valid", &rs2::triggered_calibration_status::health_valid )
+        .def_readonly( "candidate_valid", &rs2::triggered_calibration_status::candidate_valid )
+        .def_readonly( "health", &rs2::triggered_calibration_status::health )
+        .def_readonly( "candidate", &rs2::triggered_calibration_status::candidate );
+
     py::class_<rs2::auto_calibrated_device, rs2::device, py_holder<rs2::auto_calibrated_device>> auto_calibrated_device(m, "auto_calibrated_device");
     auto_calibrated_device.def(py::init<rs2::device>(), "device"_a)
         .def("write_calibration", &rs2::auto_calibrated_device::write_calibration, "Write calibration that was set by set_calibration_table to device's EEPROM.", py::call_guard<py::gil_scoped_release>())
@@ -148,6 +179,29 @@ void init_device(py::module &m) {
             rs2::calibration_table table = self.run_on_chip_calibration(json_content, &health, std::move(f), timeout_ms);
             return std::make_tuple(table, std::make_tuple(health, 0.0));
         },"This will improve the depth noise (plane fit RMS). This call is executed on the caller's thread and provides progress notifications via the callback.", "json_content"_a, "callback"_a, "timeout_ms"_a, py::call_guard<py::gil_scoped_release>())
+        .def( "run_triggered_calibration",
+              []( rs2::auto_calibrated_device & self,
+                  rs2_triggered_calibration_mode mode,
+                  int timeout_ms ) {
+                  return self.run_triggered_calibration( mode, timeout_ms );
+              },
+              "Run a typed D5x5 triggered-calibration operation.",
+              "mode"_a,
+              "timeout_ms"_a = 5000,
+              py::call_guard< py::gil_scoped_release >() )
+        .def( "run_triggered_calibration",
+              []( rs2::auto_calibrated_device & self,
+                  rs2_triggered_calibration_mode mode,
+                  std::function< void( float ) > callback,
+                  int timeout_ms ) {
+                  return self.run_triggered_calibration(
+                      mode, std::move( callback ), timeout_ms );
+              },
+              "Run a typed D5x5 triggered-calibration operation with progress notifications.",
+              "mode"_a,
+              "callback"_a,
+              "timeout_ms"_a = 5000,
+              py::call_guard< py::gil_scoped_release >() )
         .def("run_tare_calibration", [](const rs2::auto_calibrated_device& self, float ground_truth_mm, std::string json_content, int timeout_ms)
         {
             float health[] = { 0,0 };

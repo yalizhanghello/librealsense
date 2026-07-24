@@ -3908,6 +3908,66 @@ const rs2_raw_data_buffer* rs2_run_on_chip_calibration(rs2_device* device, const
 }
 HANDLE_EXCEPTIONS_AND_RETURN(nullptr, device)
 
+namespace
+{
+const rs2_raw_data_buffer * run_triggered_calibration(
+    rs2_device * device,
+    const rs2_triggered_calibration_request * request,
+    rs2_triggered_calibration_status * status,
+    rs2_update_progress_callback_sptr callback,
+    int timeout_ms )
+{
+    VALIDATE_NOT_NULL( device );
+    VALIDATE_NOT_NULL( request );
+    VALIDATE_NOT_NULL( status );
+
+    auto auto_calib = VALIDATE_INTERFACE( device->device, librealsense::auto_calibrated_interface );
+    const auto result = auto_calib->run_triggered_calibration(
+        timeout_ms,
+        static_cast< uint8_t >( request->mode ),
+        callback );
+
+    status->state = static_cast< rs2_triggered_calibration_state >( result.state );
+    status->result = static_cast< rs2_triggered_calibration_result >( result.result );
+    status->progress = result.progress;
+    status->health_valid = result.health_valid;
+    status->candidate_valid = result.candidate_valid;
+    status->health = { result.health[0], result.health[1], result.health[2], result.health[3], result.health[4] };
+    return new rs2_raw_data_buffer{ result.candidate };
+}
+}
+
+const rs2_raw_data_buffer * rs2_run_triggered_calibration_cpp(
+    rs2_device * device,
+    const rs2_triggered_calibration_request * request,
+    rs2_triggered_calibration_status * status,
+    rs2_update_progress_callback * progress_callback,
+    int timeout_ms,
+    rs2_error ** error ) BEGIN_API_CALL
+{
+    rs2_update_progress_callback_sptr callback;
+    if( progress_callback )
+        callback.reset( progress_callback, []( rs2_update_progress_callback * ptr ) { ptr->release(); } );
+    return run_triggered_calibration( device, request, status, callback, timeout_ms );
+}
+HANDLE_EXCEPTIONS_AND_RETURN( nullptr, device )
+
+const rs2_raw_data_buffer * rs2_run_triggered_calibration(
+    rs2_device * device,
+    const rs2_triggered_calibration_request * request,
+    rs2_triggered_calibration_status * status,
+    rs2_update_progress_callback_ptr progress_callback,
+    void * client_data,
+    int timeout_ms,
+    rs2_error ** error ) BEGIN_API_CALL
+{
+    rs2_update_progress_callback_sptr callback;
+    if( progress_callback )
+        callback.reset( new update_progress_callback( progress_callback, client_data ) );
+    return run_triggered_calibration( device, request, status, callback, timeout_ms );
+}
+HANDLE_EXCEPTIONS_AND_RETURN( nullptr, device )
+
 const rs2_raw_data_buffer* rs2_run_tare_calibration_cpp(rs2_device* device, float ground_truth_mm, const void* json_content, int content_size, float* health, rs2_update_progress_callback* progress_callback, int timeout_ms, rs2_error** error) BEGIN_API_CALL
 {
     // Take ownership of the callback ASAP or else memory leaks could result if we throw! (the caller usually does a

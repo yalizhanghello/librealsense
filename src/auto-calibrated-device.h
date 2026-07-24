@@ -10,6 +10,17 @@
 
 namespace librealsense
 {
+    struct triggered_calibration_status
+    {
+        uint8_t state = 0;
+        uint8_t result = 0;
+        int8_t progress = 0;
+        bool health_valid = false;
+        bool candidate_valid = false;
+        float health[5] = {};
+        std::vector< uint8_t > candidate;
+    };
+
     class auto_calibrated_interface
     {
     public:
@@ -28,6 +39,13 @@ namespace librealsense
             float target_w, float target_h, rs2_update_progress_callback_sptr progress_callback) = 0;
         virtual std::string get_calibration_config() const = 0;
         virtual void set_calibration_config(const std::string& calibration_config_json_str) const = 0;
+        virtual triggered_calibration_status run_triggered_calibration(
+            int,
+            uint8_t,
+            rs2_update_progress_callback_sptr )
+        {
+            throw std::runtime_error( "Triggered calibration is not supported by this device" );
+        }
 
         void add_depth_write_observer( std::function< void() > callback ) { _depth_write_callbacks.push_back( callback ); }
         void add_color_write_observer( std::function< void() > callback ) { _color_write_callbacks.push_back( callback ); }
