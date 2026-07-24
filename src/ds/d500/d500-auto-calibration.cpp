@@ -210,6 +210,25 @@ namespace librealsense
                 return {};
             }
 
+            // For RUN/DRY_RUN: Ensure device is in IDLE state before sending the command.
+            // If a previous calibration left the device in HEALTH_CHECK, a new RUN/DRY_RUN
+            // will be rejected with error 21 (BUSY). Query state and auto-cancel if needed.
+            if( _mode == calibration_mode::RUN || _mode == calibration_mode::DRY_RUN )
+            {
+                _calib_engine->update_triggered_calibration_status();
+                auto current_state = _calib_engine->get_triggered_calibration_state();
+                if( current_state != calibration_state::IDLE )
+                {
+                    try {
+                        // Device is not IDLE (likely stuck in HEALTH_CHECK); send CANCEL to reset it.
+                        _calib_engine->run_triggered_calibration( calibration_mode::ABORT );
+                        std::this_thread::sleep_for( std::chrono::milliseconds( 200 ) );
+                    } catch( ... ) {
+                        // Silently ignore CANCEL errors; proceed with the requested RUN/DRY_RUN anyway.
+                    }
+                }
+            }
+
             // For COMMIT / ABORT the SET_CALIB_MODE is a one-shot; state polling picks up FLASH_UPDATE / IDLE from there.
             _calib_engine->run_triggered_calibration( _mode );
 
